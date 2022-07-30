@@ -28,10 +28,11 @@ def get_invoices(
     customer_id: str = None, auto_paging=False, **kwargs
 ) -> Iterable[stripe_sdk.Invoice]:
     def _format_invoice(invoice):
-        invoice.plan = ("Custom Invoice",)
+        invoice.plan = "Custom Invoice"
         if invoice.subscription:
             subscription = get_subscription(invoice.subscription)
-            invoice.plan = subscription.plan.name
+            if subscription.plan:
+                invoice.plan = subscription.plan.name
             invoice.quantity = subscription.quantity
         return invoice
 

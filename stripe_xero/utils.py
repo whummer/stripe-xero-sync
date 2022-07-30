@@ -6,13 +6,14 @@ import tempfile
 import time
 from datetime import datetime
 
+from localstack.utils.numbers import is_number
+
 import stripe as stripe_sdk
 from localstack import config as localstack_config
 from localstack.services.generic_proxy import ProxyListener, start_proxy_server
 from localstack.utils.files import load_file
 
 TOKEN_TMP_FILE = os.path.join(tempfile.gettempdir(), "tmp.token.json")
-STATE_FILE = os.path.realpath("migration.state.json")
 
 # login redirect endpoint
 redirect_port = 54071
@@ -26,10 +27,6 @@ def dry_run():
 
 def dry_run_prefix():
     return "DRYRUN:" if dry_run() else "!LIVE RUN:"
-
-
-def to_epoch(date_str: str) -> int:
-    return int((datetime.strptime(date_str, "%Y-%m-%d") - datetime(1970, 1, 1)).total_seconds())
 
 
 class BaseClient:
@@ -61,6 +58,16 @@ class BaseClient:
         if mod_time < (time_now - cache_duration_secs):
             return
         return json.loads(load_file(TOKEN_TMP_FILE))
+
+
+def log(message):
+    print(f"{dry_run_prefix()} {message}")
+
+
+def date_to_str(date):
+    if not is_number(date):
+        return date
+    return datetime.fromtimestamp(date)
 
 
 def init_stripe():

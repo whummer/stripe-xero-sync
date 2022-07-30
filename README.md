@@ -23,6 +23,7 @@ The following options can be configured as environment variables:
 * `XERO_STRIPE_CONTACT_ID`: ID of the Xero contact that represents the Stripe payment processor
 * `XERO_TENANT_ID`: Xero tenant ID (unique ID of your organization)
 * `XERO_CLIENT_ID`: Xero client ID (for API access)
+* `XERO_CLIENT_SECRET`: Xero client secret (for API access)
 * `XERO_ACCOUNT_STRIPE_SALES`: Xero account used to track Stripe sales (revenue)
 * `XERO_ACCOUNT_STRIPE_FEES`: Xero account used to track the Stripe fees (bills/expenses)
 * `XERO_ACCOUNT_STRIPE_PAYMENTS`: Xero account used to record Stripe payments (both subscriptions and fees)

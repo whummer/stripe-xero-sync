@@ -1,13 +1,11 @@
 import json
 import logging
-import math
 import os
 import uuid
-from datetime import datetime
+from decimal import Decimal
 from urllib.parse import parse_qs
 
 from localstack.utils.files import save_file
-from localstack.utils.numbers import is_number
 from localstack.utils.strings import short_uid, to_str
 from xero_python.accounting import (
     Account,
@@ -26,12 +24,14 @@ from xero_python.api_client import ApiClient, Configuration
 from xero_python.api_client.oauth2 import OAuth2Token, TokenApi
 from xero_python.identity import IdentityApi
 
+from stripe_xero.config import get_creation_timeframe
 from stripe_xero.utils import (
     REDIRECT_URL,
     TOKEN_TMP_FILE,
     BaseClient,
     dry_run,
-    dry_run_prefix,
+    log,
+    date_to_str,
 )
 
 LOG = logging.getLogger(__name__)
@@ -106,9 +106,7 @@ class XeroClient(BaseClient):
             phones=[phone],
             is_customer=True,
         )
-        print(
-            f"{dry_run_prefix()} Creating contact '{data['name']}' - {data['email']} - {data['id']}"
-        )
+        log(f"Creating contact '{data['name']}' - {data['email']} - {data['id']}")
         if dry_run():
             CACHE.setdefault("customers", []).append(contact)
             contact.contact_id = str(uuid.uuid4())
@@ -153,18 +151,6 @@ class XeroClient(BaseClient):
         accounting_api = AccountingApi(self.client())
         account_type = "ACCREC" if acc_code == XERO_ACCOUNT_STRIPE_SALES else "ACCPAY"
 
-        def _fix_line(line):
-            expected = (line.unit_amount or 0) * (line.quantity or 0) / 100
-            actual = line.line_amount / 100
-            if not math.isclose(expected, actual):
-                LOG.debug(
-                    f"Updating invoice line (amount {line.line_amount}): "
-                    f"qty {line.quantity}->1, unit_amt {line.unit_amount}->{line.line_amount}"
-                )
-                line.quantity = 1
-                line.unit_amount = line.line_amount
-            return line
-
         # determine tax type based on customer country
         tax_type = INVOICE_TAX_RATE_OTHER
         addresses = getattr(contact, "addresses", None)
@@ -175,19 +161,15 @@ class XeroClient(BaseClient):
                 tax_type = INVOICE_TAX_RATE_CH
 
         line_items = [
-            _fix_line(
-                LineItem(
-                    # TODO: use description of line items?
-                    description=description,
-                    quantity=line.quantity or 1,
-                    unit_amount=line.unit_amount,
-                    line_amount=line.amount / 100,
-                    account_code=acc_code,
-                    tax_type=tax_type,
-                    # TODO
-                    # discount_rate=None,
-                    # discount_amount=None,
-                )
+            LineItem(
+                description=description,
+                quantity=line.quantity or 1,
+                unit_amount=line.unit_amount and line.unit_amount / 100,
+                # use None if `unit_amount` is present (per-seat billing), or use `amount` for metered billing
+                line_amount=None if line.unit_amount else line.amount / 100,
+                account_code=acc_code,
+                tax_type=tax_type,
+                discount_rate=getattr(line, "discount_rate", None),
             )
             for line in lines
         ]
@@ -210,8 +192,8 @@ class XeroClient(BaseClient):
             fully_paid_on_date=paid_at,
         )
 
-        print(
-            f"{dry_run_prefix()} Creating invoice '{description}', {total} {currency} for customer {contact.contact_id}"
+        log(
+            f"Creating invoice '{description}', {total} {currency} for customer {contact.contact_id}"
         )
         if dry_run():
             invoice.invoice_id = str(uuid.uuid4())
@@ -236,15 +218,15 @@ class XeroClient(BaseClient):
             account=Account(code=account),
             date=invoice.date,
         )
-        print(
-            f"{dry_run_prefix()} Creating payment of {invoice.total} {invoice.currency_code.value} "
+        log(
+            f"Creating payment of {invoice.total} {invoice.currency_code.value} "
             f"on {invoice.date} for invoice {invoice.invoice_id} to account {account}"
         )
         if dry_run():
             return invoice_payment
         accounting_api.create_payment(self._tenant(), invoice_payment)
 
-    def create_customer_invoice(self, data):
+    def get_existing_customer_invoice(self, data):
         accounting_api = AccountingApi(self.client())
         contact = self.get_customer(data.customer)
 
@@ -258,21 +240,29 @@ class XeroClient(BaseClient):
         if existing:
             return existing[0]
 
-        # get payment date
-        paid_at = data.status_transitions.paid_at if data.status_transitions else None
-        if paid_at:
-            paid_at = self._convert_date(paid_at)
+    def create_customer_invoice(self, data):
 
-        # print("!!data", data["lines"])
-        lines = data["lines"]["data"]
+        # check if invoice with this ID already exists
+        existing = self.get_existing_customer_invoice(data)
+        if existing:
+            return existing
+
+        contact = self.get_customer(data.customer)
+
+        # prepare lines with unit amount and discounts (if any)
+        lines = data.lines["data"]
         for line in lines:
             line.unit_amount = line.price.unit_amount
+            discount_rate = self._discount_rate(line)
+            if discount_rate:
+                line.discount_rate = discount_rate
+
         invoice = self.create_invoice(
             acc_code=XERO_ACCOUNT_STRIPE_SALES,
             reference=f"Stripe invoice {data['id']}",
             contact=contact,
             description=data["plan"],
-            total=data["total"],
+            total=data["total"] / 100,
             currency=data["currency"],
             lines=lines,
             date=data["date"],
@@ -282,32 +272,34 @@ class XeroClient(BaseClient):
         )
 
         # create payment for invoice
-        if paid_at:
-            self.create_payment(invoice, XERO_ACCOUNT_STRIPE_PAYMENTS)
+        self.create_payment(invoice, XERO_ACCOUNT_STRIPE_PAYMENTS)
 
         # create fee payment for invoice
-        # print("data", data)
         if data.get("fee", {}).get("fee"):
-            fee = data["fee"]
-            line_item = LineItem(
-                line_item_id="", quantity=1, unit_amount=fee["fee"], line_amount=fee["fee"]
-            )
-            line_item.amount = fee["fee"]
-            fee_invoice = self.create_invoice(
-                acc_code=XERO_ACCOUNT_STRIPE_FEES,
-                reference=f"Stripe fee {fee.get('id')}",
-                contact=XERO_STRIPE_CONTACT_ID,
-                description=f"Stripe fee for invoice {invoice.invoice_number}",
-                total=fee["fee"] / 100,
-                currency=data["currency"],
-                date=invoice.date,
-                lines=[line_item],
-                invoice_no=f"Stripe fee {invoice.invoice_number}",
-                paid_at=paid_at,
-            )
-            self.create_payment(fee_invoice, XERO_ACCOUNT_STRIPE_PAYMENTS)
+            self.create_fee_bill_invoice(data, invoice)
 
         return invoice
+
+    def create_fee_bill_invoice(self, data, invoice):
+        fee = data["fee"]
+        line_item = LineItem(
+            line_item_id="", quantity=1, unit_amount=fee["fee"], line_amount=fee["fee"]
+        )
+        line_item.amount = fee["fee"]
+
+        fee_invoice = self.create_invoice(
+            acc_code=XERO_ACCOUNT_STRIPE_FEES,
+            reference=f"Stripe fee {fee.get('id')}",
+            contact=XERO_STRIPE_CONTACT_ID,
+            description=f"Stripe fee for invoice {invoice.invoice_number}",
+            total=fee["fee"] / 100,
+            currency=data["currency"],
+            date=invoice.date,
+            lines=[line_item],
+            invoice_no=f"Stripe fee {invoice.invoice_number}",
+            paid_at=invoice.date,
+        )
+        self.create_payment(fee_invoice, XERO_ACCOUNT_STRIPE_PAYMENTS)
 
     # util functions below
 
@@ -320,10 +312,14 @@ class XeroClient(BaseClient):
             raise Exception(f"More than one tenant found: {result}")
         return result[0].tenant_id
 
+    def _discount_rate(self, line_item) -> float:
+        if not line_item.discount_amounts:
+            return
+        discount = sum([dis.amount for dis in line_item.discount_amounts]) / line_item.amount * 100
+        return discount
+
     def _convert_date(self, date):
-        if not is_number(date):
-            return date
-        return datetime.fromtimestamp(date)
+        return date_to_str(date)
 
     def _get_client(self, result_queue):
 
@@ -398,3 +394,60 @@ class XeroClient(BaseClient):
         token_data = json.loads(to_str(response.data))
         save_file(TOKEN_TMP_FILE, json.dumps(token_data))
         return token_data
+
+    # misc. temporary util functions below
+
+    def fix_discount_for_invoice(self, stripe_invoice, xero_invoice):
+
+        if not xero_invoice.payments:
+            return
+
+        accounting_api = AccountingApi(self.client())
+
+        # delete payments
+        for payment in xero_invoice.payments:
+            accounting_api.delete_payment(self._tenant(), payment.payment_id, {"Status": "DELETED"})
+        xero_invoice.payments = []
+
+        # update discount in line item in invoice
+        stripe_discount = self._discount_rate(stripe_invoice.lines.data[0])
+        xero_invoice.line_items[0].discount_rate = stripe_discount
+        discount_factor = Decimal((100 - stripe_discount) / 100)
+        xero_invoice.line_items[0].line_amount = (
+            xero_invoice.line_items[0].line_amount * discount_factor
+        )
+        xero_invoice.total = xero_invoice.total * discount_factor
+        xero_invoice.status = "AUTHORISED"
+        accounting_api.update_invoice(self._tenant(), xero_invoice.invoice_id, xero_invoice)
+
+        # re-create payment
+        self.create_payment(xero_invoice, XERO_ACCOUNT_STRIPE_PAYMENTS)
+
+
+def reconcile_invoice_discounts():
+    """ Temporary utility function to reconcile/fix invoice discounts between Stripe & Xerop invoices """
+    from stripe_xero import stripe
+
+    client = XeroClient()
+    kwargs = get_creation_timeframe()
+    for invoice in stripe.get_invoices(auto_paging=True, **kwargs):
+        stripe_discounts = invoice.lines.data[0].discount_amounts
+        if not stripe_discounts:
+            continue
+
+        try:
+            xero_invoice = client.get_existing_customer_invoice(invoice)
+        except Exception:
+            continue
+        if not xero_invoice:
+            continue
+        line_items = xero_invoice.line_items
+        if not line_items:
+            continue
+        if len(line_items) > 1:
+            LOG.warning("Multiple line items found for invoice %s", xero_invoice.id)
+            continue
+        discount_rate = line_items[0].discount_rate
+        if discount_rate:
+            continue
+        client.fix_discount_for_invoice(invoice, xero_invoice)

@@ -1,15 +1,16 @@
 """
-Simple script to migrate customer data from Stripe (and other sources) into QuickBooks or Xero (accounting software).
+Script to migrate customer data from Stripe into Xero (accounting software).
 """
 
 import json
 import logging
 import time
 
-from localstack.utils.common import load_file, save_file, timestamp
+from localstack.utils.common import save_file, timestamp
 
-from stripe_xero.config import check_configs, END_DATE, START_DATE, MAX_INVOICE_COUNT
-from stripe_xero.utils import STATE_FILE, dry_run, init_stripe, to_epoch
+from stripe_xero.config import check_configs, START_DATE, MAX_INVOICE_COUNT, load_state_file, get_creation_timeframe, \
+    STATE_FILE
+from stripe_xero.utils import dry_run, init_stripe, date_to_str
 from stripe_xero.xero import XeroClient
 from stripe_xero import stripe
 
@@ -23,33 +24,26 @@ def get_client() -> XeroClient:
     return XeroClient()
 
 
-# def create_customers():
-#     client = get_client()
-#     for customer in stripe.list_customers():
-#         client.get_or_create_customer(customer)
-
-
 def create_invoices():
     client = get_client()
 
     count = 0
-    state = json.loads(load_file(STATE_FILE) or "{}")
+    state = load_state_file()
     migrated_invoices = state.setdefault("migrated", [])
 
-    end_epoch = (
-        to_epoch(END_DATE) if not state.get("last_date") else state["last_date"] + 60 * 60 * 12
-    )
-    kwargs = {"created": {"gt": to_epoch(START_DATE), "lt": end_epoch}}
+    kwargs = get_creation_timeframe(state)
 
     for invoice in stripe.get_invoices(auto_paging=True, **kwargs):
         state["last_date"] = invoice.date
         save_file(STATE_FILE, json.dumps(state))
         if not dry_run() and invoice["id"] in migrated_invoices:
-            LOG.info(f"Invoice {invoice['id']} already migrated - skipping")
+            LOG.info(
+                f"Invoice {invoice['id']} ({date_to_str(invoice.date)}) already migrated - skipping"
+            )
             continue
 
         count += 1
-        paid = invoice.get("paid")
+        paid = invoice.get("paid") and invoice.get("status") == "paid"
         date = timestamp(time=invoice.get("created"), format="%Y-%m-%d")
         if date < START_DATE:
             continue
@@ -75,7 +69,7 @@ def create_invoices():
             migrated_invoices.append(invoice["id"])
             save_file(STATE_FILE, json.dumps(state))
 
-        time.sleep(2)  # TODO: better approach to deal with rate limiting
+        time.sleep(2)  # TODO: use better approach to deal with rate limiting
         if count >= MAX_INVOICE_COUNT:
             print("Done.")
             return

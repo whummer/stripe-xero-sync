@@ -129,4 +129,4 @@ dmypy.json
 .pyre/
 
 .idea/
-migration.state.json
+migration.state*.json
