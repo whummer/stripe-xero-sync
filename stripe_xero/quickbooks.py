@@ -104,6 +104,9 @@ class QuickBooksClient(BaseClient):
     def _auth_client(self):
         from intuitlib.client import AuthClient
 
+        # TODO!
+        settings = {}
+
         client_id = settings.get("qb.client_id")
         client_secret = settings.get("qb.client_secret")
         auth_client = AuthClient(

@@ -42,9 +42,23 @@ def get_invoices(
     if auto_paging:
         for entry in entries.auto_paging_iter():
             yield _format_invoice(entry)
-    else:
-        entries = [_format_invoice(inv) for inv in entries.get("data", [])]
+        return
 
+    entries = [_format_invoice(inv) for inv in entries.get("data", [])]
+    return entries
+
+
+def get_refunds(
+    customer_id: str = None, auto_paging=False, **kwargs
+) -> Iterable[stripe_sdk.Refund]:
+    if customer_id:
+        kwargs["customer"] = customer_id
+    entries = stripe_sdk.Refund.list(**kwargs)
+    if auto_paging:
+        for entry in entries.auto_paging_iter():
+            yield entry
+        return
+    entries = [ref for ref in entries.get("data", [])]
     return entries
 
 
@@ -64,3 +78,9 @@ def get_subscription(subscription_id) -> stripe_sdk.Subscription:
     if subscription_id not in CACHE:
         CACHE[subscription_id] = stripe_sdk.Subscription.retrieve(subscription_id)
     return CACHE[subscription_id]
+
+
+def get_charge(charge_id) -> stripe_sdk.Charge:
+    if charge_id not in CACHE:
+        CACHE[charge_id] = stripe_sdk.Charge.retrieve(charge_id)
+    return CACHE[charge_id]

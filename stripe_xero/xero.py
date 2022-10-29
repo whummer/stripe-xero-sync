@@ -9,11 +9,14 @@ from localstack.utils.files import save_file
 from localstack.utils.strings import short_uid, to_str
 from xero_python.accounting import (
     Account,
+    Allocation,
     AccountingApi,
     Address,
     Contact,
     Contacts,
     CurrencyCode,
+    CreditNotes,
+    CreditNote,
     Invoice,
     Invoices,
     LineItem,
@@ -50,6 +53,7 @@ XERO_ACCOUNT_STRIPE_PAYMENTS = os.environ["XERO_ACCOUNT_STRIPE_PAYMENTS"]
 # codes for tax rates
 INVOICE_TAX_RATE_CH = "OUTPUT"  # "UN77"
 INVOICE_TAX_RATE_OTHER = "TAX010"  # "ULA"
+FEES_TAX_RATE = "NONE"  # "Tax Exempt"
 
 CACHE = {}
 
@@ -151,14 +155,8 @@ class XeroClient(BaseClient):
         accounting_api = AccountingApi(self.client())
         account_type = "ACCREC" if acc_code == XERO_ACCOUNT_STRIPE_SALES else "ACCPAY"
 
-        # determine tax type based on customer country
-        tax_type = INVOICE_TAX_RATE_OTHER
-        addresses = getattr(contact, "addresses", None)
-        if addresses:
-            address = addresses[0]
-            country = address.country
-            if country == "CH":
-                tax_type = INVOICE_TAX_RATE_CH
+        # determine invoice tax type based on customer country
+        tax_type = self._get_customer_tax_type(contact)
 
         line_items = [
             LineItem(
@@ -168,7 +166,7 @@ class XeroClient(BaseClient):
                 # use None if `unit_amount` is present (per-seat billing), or use `amount` for metered billing
                 line_amount=None if line.unit_amount else line.amount / 100,
                 account_code=acc_code,
-                tax_type=tax_type,
+                tax_type=getattr(line, "tax_type", None) or tax_type,
                 discount_rate=getattr(line, "discount_rate", None),
             )
             for line in lines
@@ -210,6 +208,15 @@ class XeroClient(BaseClient):
         invoice = result[0]
         return invoice
 
+    def _get_customer_tax_type(self, contact) -> str:
+        addresses = getattr(contact, "addresses", None)
+        if addresses:
+            address = addresses[0]
+            country = address.country
+            if country == "CH":
+                return INVOICE_TAX_RATE_CH
+        return INVOICE_TAX_RATE_OTHER
+
     def create_payment(self, invoice, account):
         accounting_api = AccountingApi(self.client())
         invoice_payment = Payment(
@@ -228,17 +235,81 @@ class XeroClient(BaseClient):
 
     def get_existing_customer_invoice(self, data):
         accounting_api = AccountingApi(self.client())
-        contact = self.get_customer(data.customer)
+        if hasattr(data, "customer"):
+            invoice_no = data.id
+            customer = data.customer
+        else:
+            invoice_no = data["invoice"]
+            customer = data["customer"]
+
+        contact = self.get_customer(customer)
 
         # check if invoice with this ID already exists
         existing = accounting_api.get_invoices(self._tenant(), contact_i_ds=[contact.contact_id])
         existing = [
             inv
             for inv in existing.invoices
-            if inv.status != "VOIDED" and inv.invoice_number.startswith(data.id)
+            if inv.status != "VOIDED" and inv.invoice_number.startswith(invoice_no)
         ]
         if existing:
             return existing[0]
+
+    def get_existing_refund(self, data):
+        accounting_api = AccountingApi(self.client())
+        existing = accounting_api.get_credit_notes(self._tenant())
+        existing = [cn for cn in existing.credit_notes if data.id in str(cn.credit_note_number)]
+        if existing:
+            return existing[0]
+
+    def create_refund_credit_note(self, data):
+        accounting_api = AccountingApi(self.client())
+
+        invoice = self.get_existing_customer_invoice(data)
+        contact = self.get_customer(data["customer"])
+
+        # create allocation and line item
+        allocation = Allocation(
+            amount=data["amount"] / 100,
+            invoice=invoice,
+            date=self._convert_date(data["created"]),
+        )
+        amount = data["amount"] / 100
+        acc_code = XERO_ACCOUNT_STRIPE_SALES
+        tax_type = self._get_customer_tax_type(contact)
+        line_item = LineItem(
+            line_item_id="",
+            quantity=1,
+            unit_amount=amount,
+            line_amount=amount,
+            account_code=acc_code,
+            tax_type=tax_type,
+            description=f"Stripe refund {data.id} for invoice {invoice.invoice_number}",
+        )
+        line_item.amount = amount
+
+        # create credit note entity
+        credit_note = CreditNote(
+            credit_note_number=f"Stripe refund {data.id}",
+            contact=contact,
+            date=self._convert_date(data["created"]),
+            reference=data["charge"]["invoice"],
+            total=data["amount"] / 100,
+            sub_total=data["amount"] / 100,
+            currency_code=CurrencyCode(data["currency"].upper()),
+            # line_items=[line_item],
+            line_items=invoice.line_items,
+            allocations=[allocation],
+            type="ACCRECCREDIT",
+        )
+
+        if dry_run():
+            return credit_note
+        credit_notes = CreditNotes([credit_note])
+        result = accounting_api.create_credit_notes(self._tenant(), credit_notes)
+        # TODO: also book refund against payment account!
+        print("result", result)
+        raise
+        return result
 
     def create_customer_invoice(self, data):
 
@@ -268,7 +339,8 @@ class XeroClient(BaseClient):
             date=data["date"],
             due_date=data["due_date"],
             url=data["hosted_invoice_url"],
-            invoice_no=data["id"],
+            # note: data["number"] is the human-readable invoice no shared with the customer
+            invoice_no=data["number"],
         )
 
         # create payment for invoice
@@ -280,10 +352,22 @@ class XeroClient(BaseClient):
 
         return invoice
 
+    def create_customer_refund(self, data):
+        # check if invoice with this ID already exists
+        existing = self.get_existing_refund(data)
+        if existing:
+            return existing
+
+        self.create_refund_credit_note(data)
+
     def create_fee_bill_invoice(self, data, invoice):
         fee = data["fee"]
         line_item = LineItem(
-            line_item_id="", quantity=1, unit_amount=fee["fee"], line_amount=fee["fee"]
+            line_item_id="",
+            quantity=1,
+            unit_amount=fee["fee"],
+            line_amount=fee["fee"],
+            tax_type=FEES_TAX_RATE,
         )
         line_item.amount = fee["fee"]
 
@@ -313,7 +397,7 @@ class XeroClient(BaseClient):
         return result[0].tenant_id
 
     def _discount_rate(self, line_item) -> float:
-        if not line_item.discount_amounts:
+        if not line_item.discount_amounts or not line_item.amount:
             return
         discount = sum([dis.amount for dis in line_item.discount_amounts]) / line_item.amount * 100
         return discount
@@ -425,7 +509,7 @@ class XeroClient(BaseClient):
 
 
 def reconcile_invoice_discounts():
-    """ Temporary utility function to reconcile/fix invoice discounts between Stripe & Xerop invoices """
+    """Temporary utility function to reconcile/fix invoice discounts between Stripe & Xero invoices"""
     from stripe_xero import stripe
 
     client = XeroClient()

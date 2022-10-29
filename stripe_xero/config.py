@@ -7,10 +7,10 @@ from localstack.utils.files import load_file
 STATE_FILE = os.path.realpath("migration.state.json")
 
 # subscriptions start/end dates
-START_DATE = os.environ.get("START_DATE") or "2021-01-01"
-END_DATE = os.environ.get("END_DATE") or "2021-12-31"
-# maximum invoices to process per batch
-MAX_INVOICE_COUNT = 600
+START_DATE = os.environ.get("START_DATE") or "2022-01-01"
+END_DATE = os.environ.get("END_DATE") or "2022-12-31"
+# maximum no of entities to process per batch
+MAX_ENTITIES_COUNT = 600
 
 
 def check_configs():
