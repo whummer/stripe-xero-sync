@@ -43,3 +43,43 @@ def to_epoch(date_str: str) -> int:
 
 def load_state_file():
     return json.loads(load_file(STATE_FILE) or "{}")
+
+
+# TODO remove? may not be required...
+def get_currency_rate(date, currency):
+    """Return the FX rate for the given date and currency, against the default base currency"""
+    if not currency or str(currency).lower() == "usd":
+        return 1.0
+    # based on: https://www.x-rates.com/average/?from=EUR&to=USD&amount=1&year=2021
+    eur_usd_rates = {
+        # 2021
+        "2021-01": 1.216983,
+        "2021-02": 1.209595,
+        "2021-03": 1.191048,
+        "2021-04": 1.195110,
+        "2021-05": 1.213948,
+        "2021-06": 1.204671,
+        "2021-07": 1.182689,
+        "2021-08": 1.177138,
+        "2021-09": 1.177812,
+        "2021-10": 1.159816,
+        "2021-11": 1.141091,
+        "2021-12": 1.130427,
+        # 2022
+        "2022-01": 1.132515,
+        "2022-02": 1.134099,
+        "2022-03": 1.101000,
+        "2022-04": 1.083068,
+        "2022-05": 1.056852,
+        "2022-06": 1.057404,
+        "2022-07": 1.020338,
+        "2022-08": 1.012215,
+        "2022-09": 0.991832,
+        "2022-10": 0.983173,
+        "2022-11": 0.988636,
+    }
+    if isinstance(date, (int, float)):
+        date = datetime.fromtimestamp(date)
+    month = date.strftime("%Y-%m")
+    result = eur_usd_rates.get(month)
+    return result or 1.0

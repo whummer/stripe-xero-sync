@@ -118,7 +118,9 @@ def create_refunds():
 def main():
     check_configs()
     init_stripe()
-    create_invoices()
+    # uncomment to create invoices
+    # create_invoices()
+    # uncomment to create refunds
     # create_refunds()
 
 

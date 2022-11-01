@@ -22,12 +22,13 @@ from xero_python.accounting import (
     LineItem,
     Payment,
     Phone,
+    BankTransaction,
 )
 from xero_python.api_client import ApiClient, Configuration
 from xero_python.api_client.oauth2 import OAuth2Token, TokenApi
 from xero_python.identity import IdentityApi
 
-from stripe_xero.config import get_creation_timeframe
+from stripe_xero.config import get_creation_timeframe, get_currency_rate
 from stripe_xero.utils import (
     REDIRECT_URL,
     TOKEN_TMP_FILE,
@@ -217,26 +218,42 @@ class XeroClient(BaseClient):
                 return INVOICE_TAX_RATE_CH
         return INVOICE_TAX_RATE_OTHER
 
-    def create_payment(self, invoice, account):
+    def create_payment(self, invoice_or_credit_note, account):
+        """Create a payment of an invoice or credit note (refund) to a given account"""
         accounting_api = AccountingApi(self.client())
-        invoice_payment = Payment(
-            invoice=invoice,
-            amount=invoice.total,
+
+        payment = Payment(
+            amount=invoice_or_credit_note.total,
             account=Account(code=account),
-            date=invoice.date,
+            date=invoice_or_credit_note.date,
+            currency_rate=invoice_or_credit_note.currency_rate,
         )
+
+        invoice_id = getattr(invoice_or_credit_note, "invoice_id", None)
+        if invoice_id:
+            entity_id = invoice_id
+            entity_type = "invoice"
+            payment.invoice = invoice_or_credit_note
+            payment.payment_type = "ACCRECPAYMENT"
+        else:
+            entity_id = invoice_or_credit_note.credit_note_id
+            entity_type = "credit note (refund)"
+            payment.credit_note = invoice_or_credit_note
+            payment.payment_type = "ARCREDITPAYMENT"
+
         log(
-            f"Creating payment of {invoice.total} {invoice.currency_code.value} "
-            f"on {invoice.date} for invoice {invoice.invoice_id} to account {account}"
+            f"Creating payment of {invoice_or_credit_note.total} {invoice_or_credit_note.currency_code.value} "
+            f"on {invoice_or_credit_note.date} for {entity_type} {entity_id} to account {account}"
         )
         if dry_run():
-            return invoice_payment
-        accounting_api.create_payment(self._tenant(), invoice_payment)
+            return payment
+        result = accounting_api.create_payment(self._tenant(), payment)
+        return result
 
     def get_existing_customer_invoice(self, data):
         accounting_api = AccountingApi(self.client())
         if hasattr(data, "customer"):
-            invoice_no = data.id
+            invoice_no = data.invoice
             customer = data.customer
         else:
             invoice_no = data["invoice"]
@@ -249,7 +266,8 @@ class XeroClient(BaseClient):
         existing = [
             inv
             for inv in existing.invoices
-            if inv.status != "VOIDED" and inv.invoice_number.startswith(invoice_no)
+            if inv.status != "VOIDED"
+            and (invoice_no in inv.invoice_number or invoice_no in inv.reference)
         ]
         if existing:
             return existing[0]
@@ -296,19 +314,22 @@ class XeroClient(BaseClient):
             total=data["amount"] / 100,
             sub_total=data["amount"] / 100,
             currency_code=CurrencyCode(data["currency"].upper()),
-            # line_items=[line_item],
-            line_items=invoice.line_items,
+            line_items=[line_item],
             allocations=[allocation],
             type="ACCRECCREDIT",
+            status="AUTHORISED",
         )
 
         if dry_run():
             return credit_note
+
         credit_notes = CreditNotes([credit_note])
         result = accounting_api.create_credit_notes(self._tenant(), credit_notes)
-        # TODO: also book refund against payment account!
-        print("result", result)
-        raise
+        credit_note = result.credit_notes[0]
+
+        # create payment for credit note
+        self.create_payment(credit_note, XERO_ACCOUNT_STRIPE_PAYMENTS)
+
         return result
 
     def create_customer_invoice(self, data):
@@ -347,7 +368,7 @@ class XeroClient(BaseClient):
         self.create_payment(invoice, XERO_ACCOUNT_STRIPE_PAYMENTS)
 
         # create fee payment for invoice
-        if data.get("fee", {}).get("fee"):
+        if (data.get("fee") or {}).get("fee"):
             self.create_fee_bill_invoice(data, invoice)
 
         return invoice
