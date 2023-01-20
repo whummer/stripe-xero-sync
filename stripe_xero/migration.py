@@ -40,11 +40,12 @@ def create_invoices():
     kwargs = get_creation_timeframe(state)
 
     for invoice in stripe.get_invoices(auto_paging=True, **kwargs):
-        state["last_date"] = invoice.date
+        invoice_date = getattr(invoice, "date", None) or invoice.created
+        state["last_date"] = invoice_date
         save_file(STATE_FILE, json.dumps(state))
         if not dry_run() and invoice["id"] in migrated_invoices:
             LOG.info(
-                f"Invoice {invoice['id']} ({date_to_str(invoice.date)}) already migrated - skipping"
+                f"Invoice {invoice['id']} ({date_to_str(invoice_date)}) already migrated - skipping"
             )
             continue
 
@@ -118,8 +119,10 @@ def create_refunds():
 def main():
     check_configs()
     init_stripe()
+
     # uncomment to create invoices
     # create_invoices()
+
     # uncomment to create refunds
     # create_refunds()
 

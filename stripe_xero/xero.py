@@ -22,13 +22,12 @@ from xero_python.accounting import (
     LineItem,
     Payment,
     Phone,
-    BankTransaction,
 )
 from xero_python.api_client import ApiClient, Configuration
 from xero_python.api_client.oauth2 import OAuth2Token, TokenApi
 from xero_python.identity import IdentityApi
 
-from stripe_xero.config import get_creation_timeframe, get_currency_rate
+from stripe_xero.config import get_creation_timeframe
 from stripe_xero.utils import (
     REDIRECT_URL,
     TOKEN_TMP_FILE,
@@ -109,6 +108,7 @@ class XeroClient(BaseClient):
             # email_address=None,  # skip setting email! (avoid sending out messages)
             addresses=[addr],
             phones=[phone],
+            account_number=data["id"],
             is_customer=True,
         )
         log(f"Creating contact '{data['name']}' - {data['email']} - {data['id']}")
@@ -159,19 +159,33 @@ class XeroClient(BaseClient):
         # determine invoice tax type based on customer country
         tax_type = self._get_customer_tax_type(contact)
 
-        line_items = [
-            LineItem(
-                description=description,
-                quantity=line.quantity or 1,
-                unit_amount=line.unit_amount and line.unit_amount / 100,
-                # use None if `unit_amount` is present (per-seat billing), or use `amount` for metered billing
-                line_amount=None if line.unit_amount else line.amount / 100,
+        line_items = []
+        for line in lines:
+            # ensure correct param combinations, to avoid "the line total xx does not match the expected line total yy"
+            line_amount = None
+            unit_amount = None
+            quantity = None
+            is_fee_invoice = not hasattr(line, "price")
+            if is_fee_invoice or line.amount != line.quantity * (line.price.unit_amount or 0):
+                # set a custom line amount if the `amount` does not match `quantity` * `unit_amount`
+                # (use None if `unit_amount` is present (per-seat billing), or use `amount` for metered billing)
+                line_amount = line.amount / 100
+            if is_fee_invoice or (not line_amount and line.unit_amount):
+                unit_amount = line.unit_amount / 100
+                quantity = line.quantity or 1
+            if not unit_amount and not line_amount:
+                # skip recording empty line items (with amount 0)
+                continue
+            item = LineItem(
+                description=line.description or description,
+                quantity=quantity,
+                unit_amount=unit_amount,
+                line_amount=line_amount,
                 account_code=acc_code,
                 tax_type=getattr(line, "tax_type", None) or tax_type,
                 discount_rate=getattr(line, "discount_rate", None),
             )
-            for line in lines
-        ]
+            line_items.append(item)
 
         contact = Contact(contact_id=contact) if isinstance(contact, str) else contact
 
@@ -252,14 +266,17 @@ class XeroClient(BaseClient):
 
     def get_existing_customer_invoice(self, data):
         accounting_api = AccountingApi(self.client())
-        if hasattr(data, "customer"):
-            invoice_no = data.invoice
+        if hasattr(data, "customer") and data.object == "invoice":
+            invoice_no = data.id
             customer = data.customer
         else:
             invoice_no = data["invoice"]
             customer = data["customer"]
 
         contact = self.get_customer(customer)
+        if not contact:
+            LOG.warning("Unable to find customer %s in Xero: %s", customer, contact)
+            return
 
         # check if invoice with this ID already exists
         existing = accounting_api.get_invoices(self._tenant(), contact_i_ds=[contact.contact_id])
@@ -283,6 +300,9 @@ class XeroClient(BaseClient):
         accounting_api = AccountingApi(self.client())
 
         invoice = self.get_existing_customer_invoice(data)
+        if not invoice:
+            LOG.warning("Unable to find subscription invoice: %s", data.invoice)
+            return
         contact = self.get_customer(data["customer"])
 
         # create allocation and line item
@@ -320,6 +340,10 @@ class XeroClient(BaseClient):
             status="AUTHORISED",
         )
 
+        log(
+            f"Creating refund credit note {data.id} for "
+            f"invoice {data['charge']['invoice']}, customer {data['customer']}"
+        )
         if dry_run():
             return credit_note
 
@@ -353,11 +377,11 @@ class XeroClient(BaseClient):
             acc_code=XERO_ACCOUNT_STRIPE_SALES,
             reference=f"Stripe invoice {data['id']}",
             contact=contact,
-            description=data["plan"],
+            description=f'{data["plan"]} ({data["number"]})',
             total=data["total"] / 100,
             currency=data["currency"],
             lines=lines,
-            date=data["date"],
+            date=data.get("date") or data["created"],
             due_date=data["due_date"],
             url=data["hosted_invoice_url"],
             # note: data["number"] is the human-readable invoice no shared with the customer

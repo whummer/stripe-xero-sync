@@ -32,7 +32,9 @@ def get_invoices(
         if invoice.subscription:
             subscription = get_subscription(invoice.subscription)
             if subscription.plan:
-                invoice.plan = subscription.plan.name
+                invoice.plan = (
+                    getattr(subscription.plan, "nickname", None) or subscription.plan.name
+                )
             invoice.quantity = subscription.quantity
         return invoice
 

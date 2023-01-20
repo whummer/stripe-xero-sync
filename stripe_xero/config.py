@@ -10,7 +10,7 @@ STATE_FILE = os.path.realpath("migration.state.json")
 START_DATE = os.environ.get("START_DATE") or "2022-01-01"
 END_DATE = os.environ.get("END_DATE") or "2022-12-31"
 # maximum no of entities to process per batch
-MAX_ENTITIES_COUNT = 600
+MAX_ENTITIES_COUNT = 1000
 
 
 def check_configs():
@@ -29,11 +29,16 @@ def check_configs():
 
 
 def get_creation_timeframe(state=None):
+    """
+    Get timeframe of invoices to search (based on their creation timestamp). Note that the Stripe client
+    iterates subscriptions from newest to oldest, hence keeping the `last_date` watermark as upper date limit
+    """
     state = state or load_state_file()
     end_epoch = (
         to_epoch(END_DATE) if not state.get("last_date") else state["last_date"] + 60 * 60 * 24
     )
-    kwargs = {"created": {"gt": to_epoch(START_DATE), "lt": end_epoch}}
+    start_epoch = to_epoch(START_DATE)
+    kwargs = {"created": {"gt": start_epoch, "lt": end_epoch}}
     return kwargs
 
 
