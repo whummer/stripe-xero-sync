@@ -39,6 +39,8 @@ from stripe_xero.utils import (
 
 LOG = logging.getLogger(__name__)
 
+FORMAT_INVOICE_NO = "Stripe fee {invoice_number}"
+
 # Xero configs
 XERO_TENANT_ID = os.environ["XERO_TENANT_ID"]
 XERO_CLIENT_ID = os.environ["XERO_CLIENT_ID"]
@@ -289,12 +291,36 @@ class XeroClient(BaseClient):
         if existing:
             return existing[0]
 
+    def get_existing_invoice_fee(self, invoice):
+        accounting_api = AccountingApi(self.client())
+        invoice_no = FORMAT_INVOICE_NO.format(invoice_number=invoice.invoice_number)
+        existing = accounting_api.get_invoices(self._tenant(), invoice_numbers=[invoice_no])
+        if existing and existing.invoices:
+            return existing.invoices[0]
+
     def get_existing_refund(self, data):
         accounting_api = AccountingApi(self.client())
         existing = accounting_api.get_credit_notes(self._tenant())
         existing = [cn for cn in existing.credit_notes if data.id in str(cn.credit_note_number)]
         if existing:
             return existing[0]
+
+    def delete_invoice_payment(self, invoice):
+        assert len(invoice.payments) == 1
+        payment_id = invoice.payments[0].payment_id
+        accounting_api = AccountingApi(self.client())
+        result = accounting_api.delete_payment(
+            self._tenant(), payment_id=payment_id, payment_delete={"Status": "DELETED"}
+        )
+        return result
+
+    def update_invoice(self, invoice):
+        accounting_api = AccountingApi(self.client())
+        invoices = Invoices([invoice])
+        result = accounting_api.update_invoice(
+            self._tenant(), invoice_id=invoice.invoice_id, invoices=invoices
+        )
+        return result.invoices[0]
 
     def create_refund_credit_note(self, data):
         accounting_api = AccountingApi(self.client())
@@ -389,6 +415,7 @@ class XeroClient(BaseClient):
         )
 
         # create payment for invoice
+        # TODO: check if payment currency matches!
         self.create_payment(invoice, XERO_ACCOUNT_STRIPE_PAYMENTS)
 
         # create fee payment for invoice
@@ -418,14 +445,14 @@ class XeroClient(BaseClient):
 
         fee_invoice = self.create_invoice(
             acc_code=XERO_ACCOUNT_STRIPE_FEES,
-            reference=f"Stripe fee {fee.get('id')}",
+            reference=FORMAT_INVOICE_NO.format(invoice_number=fee.get("id")),
             contact=XERO_STRIPE_CONTACT_ID,
             description=f"Stripe fee for invoice {invoice.invoice_number}",
             total=fee["fee"] / 100,
-            currency=data["currency"],
+            currency=fee["currency"],
             date=invoice.date,
             lines=[line_item],
-            invoice_no=f"Stripe fee {invoice.invoice_number}",
+            invoice_no=FORMAT_INVOICE_NO.format(invoice_number=invoice.invoice_number),
             paid_at=invoice.date,
         )
         self.create_payment(fee_invoice, XERO_ACCOUNT_STRIPE_PAYMENTS)

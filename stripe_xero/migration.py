@@ -126,6 +126,8 @@ def main():
     # uncomment to create refunds
     # create_refunds()
 
+    # fix_payment_currencies()
+
 
 if __name__ == "__main__":
     main()

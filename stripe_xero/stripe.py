@@ -50,6 +50,11 @@ def get_invoices(
     return entries
 
 
+def get_invoice(invoice_id: str = None) -> stripe_sdk.Invoice:
+    result = stripe_sdk.Invoice.retrieve(invoice_id)
+    return result
+
+
 def get_refunds(
     customer_id: str = None, auto_paging=False, **kwargs
 ) -> Iterable[stripe_sdk.Refund]:
@@ -65,6 +70,14 @@ def get_refunds(
 
 
 def get_fees(invoice: stripe_sdk.Invoice) -> Optional[Fee]:
+    transaction = get_fee_transaction(invoice)
+    if not transaction:
+        return
+    result = Fee(**select_attributes(transaction, ["fee", "fee_details", "currency"]))
+    return result
+
+
+def get_fee_transaction(invoice: stripe_sdk.Invoice) -> Optional[stripe_sdk.BalanceTransaction]:
     if not invoice.charge:
         return
     charge = stripe_sdk.Charge.retrieve(invoice.charge)
@@ -72,8 +85,7 @@ def get_fees(invoice: stripe_sdk.Invoice) -> Optional[Fee]:
     if not txn:
         return
     transaction = stripe_sdk.BalanceTransaction.retrieve(txn)
-    result = Fee(**select_attributes(transaction, ["fee", "fee_details", "currency"]))
-    return result
+    return transaction
 
 
 def get_subscription(subscription_id) -> stripe_sdk.Subscription:

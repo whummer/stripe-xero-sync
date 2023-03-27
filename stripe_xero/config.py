@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from datetime import datetime
 
 from localstack.utils.files import load_file
@@ -7,8 +8,8 @@ from localstack.utils.files import load_file
 STATE_FILE = os.path.realpath("migration.state.json")
 
 # subscriptions start/end dates
-START_DATE = os.environ.get("START_DATE") or "2022-01-01"
-END_DATE = os.environ.get("END_DATE") or "2022-12-31"
+START_DATE = os.environ.get("START_DATE") or "2023-01-01"
+END_DATE = os.environ.get("END_DATE") or "2023-12-31"
 # maximum no of entities to process per batch
 MAX_ENTITIES_COUNT = 1000
 
@@ -44,6 +45,10 @@ def get_creation_timeframe(state=None):
 
 def to_epoch(date_str: str) -> int:
     return int((datetime.strptime(date_str, "%Y-%m-%d") - datetime(1970, 1, 1)).total_seconds())
+
+
+def from_epoch(date_int: int) -> str:
+    return time.strftime("%Y-%m-%d", time.localtime(date_int))
 
 
 def load_state_file():
