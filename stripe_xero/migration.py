@@ -61,6 +61,8 @@ def create_invoices():
 
         # fetch Stripe fees for this invoice
         invoice.fee = stripe.get_fees(invoice)
+        if invoice.fee:
+            invoice.payment_currency = invoice.fee["currency"]
 
         # get or create customer
         customer = {"id": invoice["customer"]}
@@ -76,7 +78,7 @@ def create_invoices():
             migrated_invoices.append(invoice["id"])
             save_file(STATE_FILE, json.dumps(state))
 
-        time.sleep(2)  # TODO: use better approach to deal with rate limiting
+        time.sleep(3)  # TODO: use better approach to deal with rate limiting
         if count >= MAX_ENTITIES_COUNT:
             print("Done.")
             return
@@ -110,7 +112,7 @@ def create_refunds():
             migrated_refunds.append(refund["id"])
             save_file(STATE_FILE, json.dumps(state))
 
-        time.sleep(1)  # TODO: use better approach to deal with rate limiting
+        time.sleep(2)  # TODO: use better approach to deal with rate limiting
         if count >= MAX_ENTITIES_COUNT:
             print("Done.")
             return

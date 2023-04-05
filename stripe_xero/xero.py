@@ -415,7 +415,8 @@ class XeroClient(BaseClient):
         )
 
         # create payment for invoice
-        # TODO: check if payment currency matches!
+        if hasattr(data, "payment_currency"):
+            invoice.currency_code = CurrencyCode(data.payment_currency.upper())
         self.create_payment(invoice, XERO_ACCOUNT_STRIPE_PAYMENTS)
 
         # create fee payment for invoice

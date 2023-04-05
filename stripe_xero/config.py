@@ -11,7 +11,7 @@ STATE_FILE = os.path.realpath("migration.state.json")
 START_DATE = os.environ.get("START_DATE") or "2023-01-01"
 END_DATE = os.environ.get("END_DATE") or "2023-12-31"
 # maximum no of entities to process per batch
-MAX_ENTITIES_COUNT = 1000
+MAX_ENTITIES_COUNT = 500
 
 
 def check_configs():
