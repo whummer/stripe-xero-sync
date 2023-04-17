@@ -55,6 +55,12 @@ def get_invoice(invoice_id: str = None) -> stripe_sdk.Invoice:
     return result
 
 
+def find_invoice(query: str) -> Optional[stripe_sdk.Invoice]:
+    result = stripe_sdk.Invoice.search(query=query)
+    data = result.get("data") or []
+    return (data or [None])[0]
+
+
 def get_refunds(
     customer_id: str = None, auto_paging=False, **kwargs
 ) -> Iterable[stripe_sdk.Refund]:

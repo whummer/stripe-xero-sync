@@ -31,8 +31,6 @@ def get_client() -> XeroClient:
 
 
 def create_invoices():
-    client = get_client()
-
     count = 0
     state = load_state_file()
     migrated_invoices = state.setdefault("migrated", [])
@@ -40,6 +38,7 @@ def create_invoices():
     kwargs = get_creation_timeframe(state)
 
     for invoice in stripe.get_invoices(auto_paging=True, **kwargs):
+
         invoice_date = getattr(invoice, "date", None) or invoice.created
         state["last_date"] = invoice_date
         save_file(STATE_FILE, json.dumps(state))
@@ -47,32 +46,9 @@ def create_invoices():
             LOG.info(
                 f"Invoice {invoice['id']} ({date_to_str(invoice_date)}) already migrated - skipping"
             )
-            continue
+            return
 
-        count += 1
-        paid = invoice.get("paid") and invoice.get("status") == "paid"
-        date = timestamp(time=invoice.get("created"), format="%Y-%m-%d")
-        if date < START_DATE:
-            continue
-        if invoice.get("total", 0) <= 0:
-            continue
-        if not paid:
-            continue
-
-        # fetch Stripe fees for this invoice
-        invoice.fee = stripe.get_fees(invoice)
-        if invoice.fee:
-            invoice.payment_currency = invoice.fee["currency"]
-
-        # get or create customer
-        customer = {"id": invoice["customer"]}
-        customer1 = client.get_customer(customer)
-        if not customer1:
-            customer = stripe.get_customer(invoice["customer"])
-            client.create_customer(customer)
-
-        # store invoice to accounting system
-        client.create_customer_invoice(invoice)
+        create_invoice(invoice)
 
         if not dry_run():
             migrated_invoices.append(invoice["id"])
@@ -82,6 +58,38 @@ def create_invoices():
         if count >= MAX_ENTITIES_COUNT:
             print("Done.")
             return
+
+
+def create_invoice(invoice):
+    client = get_client()
+
+    if isinstance(invoice, str):
+        invoice = stripe.find_invoice(f"number: '{invoice}'")
+        assert invoice
+
+    paid = invoice.get("paid") and invoice.get("status") == "paid"
+    date = timestamp(time=invoice.get("created"), format="%Y-%m-%d")
+    if date < START_DATE:
+        return
+    if invoice.get("total", 0) <= 0:
+        return
+    if not paid:
+        return
+
+    # fetch Stripe fees for this invoice
+    invoice.fee = stripe.get_fees(invoice)
+    if invoice.fee:
+        invoice.payment_currency = invoice.fee["currency"]
+
+    # get or create customer
+    customer = {"id": invoice["customer"]}
+    customer1 = client.get_customer(customer)
+    if not customer1:
+        customer = stripe.get_customer(invoice["customer"])
+        client.create_customer(customer)
+
+    # store invoice to accounting system
+    client.create_customer_invoice(invoice)
 
 
 def create_refunds():

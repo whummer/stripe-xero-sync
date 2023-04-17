@@ -399,11 +399,12 @@ class XeroClient(BaseClient):
             if discount_rate:
                 line.discount_rate = discount_rate
 
+        plan = data.get("plan") or data["lines"]["data"][0]["plan"]["nickname"]
         invoice = self.create_invoice(
             acc_code=XERO_ACCOUNT_STRIPE_SALES,
             reference=f"Stripe invoice {data['id']}",
             contact=contact,
-            description=f'{data["plan"]} ({data["number"]})',
+            description=f'{plan} ({data["number"]})',
             total=data["total"] / 100,
             currency=data["currency"],
             lines=lines,
