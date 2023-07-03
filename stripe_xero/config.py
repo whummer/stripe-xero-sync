@@ -13,6 +13,9 @@ END_DATE = os.environ.get("END_DATE") or "2023-12-31"
 # maximum no of entities to process per batch
 MAX_ENTITIES_COUNT = 500
 
+# whether to create fee invoices and payments (can be disabled, to reduce amount of created entities)
+CREATE_FEES = False
+
 
 def check_configs():
     keys = [
@@ -35,9 +38,10 @@ def get_creation_timeframe(state=None):
     iterates subscriptions from newest to oldest, hence keeping the `last_date` watermark as upper date limit
     """
     state = state or load_state_file()
-    end_epoch = (
-        to_epoch(END_DATE) if not state.get("last_date") else state["last_date"] + 60 * 60 * 24
-    )
+    end_epoch = to_epoch(END_DATE)
+    if state.get("last_date"):
+        end_epoch = state["last_date"] + 60 * 60 * 24
+    end_epoch = min(end_epoch, to_epoch(END_DATE))
     start_epoch = to_epoch(START_DATE)
     kwargs = {"created": {"gt": start_epoch, "lt": end_epoch}}
     return kwargs

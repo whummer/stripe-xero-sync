@@ -31,6 +31,8 @@ def get_client() -> XeroClient:
 
 
 def create_invoices():
+    client = get_client()
+
     count = 0
     state = load_state_file()
     migrated_invoices = state.setdefault("migrated", [])
@@ -46,9 +48,9 @@ def create_invoices():
             LOG.info(
                 f"Invoice {invoice['id']} ({date_to_str(invoice_date)}) already migrated - skipping"
             )
-            return
+            continue
 
-        create_invoice(invoice)
+        create_invoice(invoice, client=client)
 
         if not dry_run():
             migrated_invoices.append(invoice["id"])
@@ -60,8 +62,8 @@ def create_invoices():
             return
 
 
-def create_invoice(invoice):
-    client = get_client()
+def create_invoice(invoice, client=None):
+    client = client or get_client()
 
     if isinstance(invoice, str):
         invoice = stripe.find_invoice(f"number: '{invoice}'")
@@ -129,6 +131,9 @@ def create_refunds():
 def main():
     check_configs()
     init_stripe()
+
+    # TODO: create invoices with the date of the payment date!
+    # TODO: create a single invoice for all combined Stripe fees (instead of individual ones)
 
     # uncomment to create invoices
     # create_invoices()

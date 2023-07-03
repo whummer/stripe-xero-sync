@@ -27,6 +27,7 @@ from xero_python.api_client import ApiClient, Configuration
 from xero_python.api_client.oauth2 import OAuth2Token, TokenApi
 from xero_python.identity import IdentityApi
 
+from stripe_xero import config
 from stripe_xero.config import get_creation_timeframe
 from stripe_xero.utils import (
     REDIRECT_URL,
@@ -53,7 +54,8 @@ XERO_ACCOUNT_STRIPE_FEES = os.environ["XERO_ACCOUNT_STRIPE_FEES"]
 # account used for actual payments (revenues in, and fees out)
 XERO_ACCOUNT_STRIPE_PAYMENTS = os.environ["XERO_ACCOUNT_STRIPE_PAYMENTS"]
 # codes for tax rates
-INVOICE_TAX_RATE_CH = "OUTPUT"  # "UN77"
+# INVOICE_TAX_RATE_CH = "OUTPUT"  # "UN77"
+INVOICE_TAX_RATE_CH = "TAX010"  # "ULA"
 INVOICE_TAX_RATE_OTHER = "TAX010"  # "ULA"
 FEES_TAX_RATE = "NONE"  # "Tax Exempt"
 
@@ -175,9 +177,12 @@ class XeroClient(BaseClient):
             if is_fee_invoice or (not line_amount and line.unit_amount):
                 unit_amount = line.unit_amount / 100
                 quantity = line.quantity or 1
+                line_amount = unit_amount * quantity
             if not unit_amount and not line_amount:
                 # skip recording empty line items (with amount 0)
                 continue
+            if getattr(line, "discount_rate", 0):
+                line_amount *= (100 - line.discount_rate) / 100
             item = LineItem(
                 description=line.description or description,
                 quantity=quantity,
@@ -435,6 +440,8 @@ class XeroClient(BaseClient):
         self.create_refund_credit_note(data)
 
     def create_fee_bill_invoice(self, data, invoice):
+        if not config.CREATE_FEES:
+            return
         fee = data["fee"]
         line_item = LineItem(
             line_item_id="",
@@ -472,7 +479,7 @@ class XeroClient(BaseClient):
 
     def _discount_rate(self, line_item) -> float:
         if not line_item.discount_amounts or not line_item.amount:
-            return
+            return 0
         discount = sum([dis.amount for dis in line_item.discount_amounts]) / line_item.amount * 100
         return discount
 
