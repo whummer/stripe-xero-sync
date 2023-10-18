@@ -54,8 +54,8 @@ XERO_ACCOUNT_STRIPE_FEES = os.environ["XERO_ACCOUNT_STRIPE_FEES"]
 # account used for actual payments (revenues in, and fees out)
 XERO_ACCOUNT_STRIPE_PAYMENTS = os.environ["XERO_ACCOUNT_STRIPE_PAYMENTS"]
 # codes for tax rates
-# INVOICE_TAX_RATE_CH = "OUTPUT"  # "UN77"
-INVOICE_TAX_RATE_CH = "TAX010"  # "ULA"
+INVOICE_TAX_RATE_CH = "OUTPUT"  # "UN77"
+# INVOICE_TAX_RATE_CH = "TAX010"  # "ULA"
 INVOICE_TAX_RATE_OTHER = "TAX010"  # "ULA"
 FEES_TAX_RATE = "NONE"  # "Tax Exempt"
 

@@ -15,6 +15,7 @@ from stripe_xero.config import (
     load_state_file,
     get_creation_timeframe,
     STATE_FILE,
+    ONLY_PAID_INVOICES,
 )
 from stripe_xero.utils import dry_run, init_stripe, date_to_str
 from stripe_xero.xero import XeroClient
@@ -40,7 +41,6 @@ def create_invoices():
     kwargs = get_creation_timeframe(state)
 
     for invoice in stripe.get_invoices(auto_paging=True, **kwargs):
-
         invoice_date = getattr(invoice, "date", None) or invoice.created
         state["last_date"] = invoice_date
         save_file(STATE_FILE, json.dumps(state))
@@ -75,7 +75,7 @@ def create_invoice(invoice, client=None):
         return
     if invoice.get("total", 0) <= 0:
         return
-    if not paid:
+    if not paid and ONLY_PAID_INVOICES:
         return
 
     # fetch Stripe fees for this invoice
