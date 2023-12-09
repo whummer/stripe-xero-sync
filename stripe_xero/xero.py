@@ -388,7 +388,6 @@ class XeroClient(BaseClient):
         return result
 
     def create_customer_invoice(self, data):
-
         # check if invoice with this ID already exists
         existing = self.get_existing_customer_invoice(data)
         if existing:
@@ -487,7 +486,6 @@ class XeroClient(BaseClient):
         return date_to_str(date)
 
     def _get_client(self, result_queue):
-
         api_client = ApiClient(
             Configuration(
                 # debug=True,
@@ -563,7 +561,6 @@ class XeroClient(BaseClient):
     # misc. temporary util functions below
 
     def fix_discount_for_invoice(self, stripe_invoice, xero_invoice):
-
         if not xero_invoice.payments:
             return
 

@@ -6,11 +6,14 @@ import tempfile
 import time
 from datetime import datetime
 
-from localstack.utils.numbers import is_number
 
+from localstack.utils.strings import to_str
+from localstack.utils.aws.aws_responses import requests_response
+from localstack.utils.ssl import create_ssl_cert
+from localstack.utils.numbers import is_number
+from localstack.utils.server.http2_server import run_server
 import stripe as stripe_sdk
 from localstack import config as localstack_config
-from localstack.services.generic_proxy import ProxyListener, start_proxy_server
 from localstack.utils.files import load_file
 
 TOKEN_TMP_FILE = os.path.join(tempfile.gettempdir(), "tmp.token.json")
@@ -35,13 +38,17 @@ class BaseClient:
         if self._client:
             return self._client
 
-        class Listener(ProxyListener):
-            def forward_request(self, method, path, *args, **kwargs):
-                _queue.put(path)
-                return {}
+        def handler(request, data):
+            _queue.put(f"{request.path}?{to_str(request.query_string)}")
+            return requests_response("auth succeeded", status_code=200)
+
+        _, cert_file_name, key_file_name = create_ssl_cert()
+        ssl_creds = (cert_file_name, key_file_name)
+        server = run_server(
+            port=redirect_port, bind_addresses=["127.0.0.1"], handler=handler, ssl_creds=ssl_creds
+        )
 
         _queue = queue.Queue()
-        server = start_proxy_server(port=redirect_port, update_listener=Listener(), use_ssl=True)
         self._client = self._get_client(_queue)
         server.stop()
         return self._client
