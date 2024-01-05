@@ -311,14 +311,23 @@ class XeroClient(BaseClient):
         if existing:
             return existing[0]
 
-    def delete_invoice_payment(self, invoice):
-        assert len(invoice.payments) == 1
-        payment_id = invoice.payments[0].payment_id
-        accounting_api = AccountingApi(self.client())
-        result = accounting_api.delete_payment(
-            self._tenant(), payment_id=payment_id, payment_delete={"Status": "DELETED"}
-        )
-        return result
+    def delete_invoice_payment(self, xero_invoice):
+        assert len(xero_invoice.payments) == 1
+        payment_id = xero_invoice.payments[0].payment_id
+        log(f"Deleting payment {payment_id} for invoice '{xero_invoice.invoice_id}' from Xero")
+        if not dry_run():
+            accounting_api = AccountingApi(self.client())
+            result = accounting_api.delete_payment(
+                self._tenant(), payment_id=payment_id, payment_delete={"Status": "DELETED"}
+            )
+            return result
+
+    def delete_invoice(self, xero_invoice):
+        log(f"Deleting/voiding invoice '{xero_invoice.invoice_id}' from Xero")
+        if not dry_run():
+            xero_invoice.status = "VOIDED"
+            result = self.update_invoice(xero_invoice)
+            return result
 
     def update_invoice(self, invoice):
         accounting_api = AccountingApi(self.client())

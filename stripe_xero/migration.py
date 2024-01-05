@@ -94,6 +94,43 @@ def create_invoice(invoice, client=None):
     client.create_customer_invoice(invoice)
 
 
+def delete_unpaid_invoices():
+    client = get_client()
+    state = load_state_file()
+    deleted_invoices = state.setdefault("deleted_invoices", [])
+
+    kwargs = get_creation_timeframe(state)
+
+    for invoice in stripe.get_invoices(auto_paging=True, **kwargs):
+        if invoice["id"] in deleted_invoices:
+            continue
+        paid = invoice.get("paid") and invoice.get("status") == "paid"
+        if paid:
+            continue
+
+        delete_invoice(invoice, client=client)
+        time.sleep(2)  # TODO: use better approach to deal with rate limiting
+
+        if not dry_run():
+            deleted_invoices.append(invoice["id"])
+            save_file(STATE_FILE, json.dumps(state))
+
+
+def delete_invoice(invoice, client):
+    LOG.info(f"Deleting invoice {invoice['id']} from Xero...")
+
+    xero_invoice = client.get_existing_customer_invoice(invoice)
+    if not xero_invoice:
+        LOG.info(f"Invoice {invoice['id']} not found in Xero - skipping...")
+        return
+
+    # delete invoice payment
+    client.delete_invoice_payment(xero_invoice)
+
+    # delete invoice from accounting system
+    client.delete_invoice(xero_invoice)
+
+
 def create_refunds():
     client = get_client()
 
@@ -140,6 +177,9 @@ def main():
 
     # uncomment to create refunds
     # create_refunds()
+
+    # uncomment to delete invoices from Xero that have no associated payment in Stripe
+    # delete_unpaid_invoices()
 
     # fix_payment_currencies()
 
