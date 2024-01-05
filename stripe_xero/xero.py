@@ -294,6 +294,7 @@ class XeroClient(BaseClient):
             and (invoice_no in inv.invoice_number or invoice_no in inv.reference)
         ]
         if existing:
+            log(f"Invoice number {invoice_no} already exists in Xero - skipping")
             return existing[0]
 
     def get_existing_invoice_fee(self, invoice):

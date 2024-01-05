@@ -8,7 +8,7 @@ from localstack.utils.files import load_file
 STATE_FILE = os.path.realpath("migration.state.json")
 
 # subscriptions start/end dates
-START_DATE = os.environ.get("START_DATE") or "2023-06-30"
+START_DATE = os.environ.get("START_DATE") or "2023-09-30"
 END_DATE = os.environ.get("END_DATE") or "2023-12-31"
 # maximum no of entities to process per batch
 MAX_ENTITIES_COUNT = 500
@@ -17,7 +17,7 @@ MAX_ENTITIES_COUNT = 500
 CREATE_FEES = False
 
 # whether to migrate and create only paid invoices (and skip unpaid ones)
-ONLY_PAID_INVOICES = False
+ONLY_PAID_INVOICES = True
 
 
 def check_configs():
