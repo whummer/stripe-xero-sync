@@ -48,6 +48,7 @@ def create_invoices():
             LOG.info(
                 f"Invoice {invoice['id']} ({date_to_str(invoice_date)}) already migrated - skipping"
             )
+            time.sleep(0.8)
             continue
 
         create_invoice(invoice, client=client)
