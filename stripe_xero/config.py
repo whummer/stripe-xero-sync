@@ -17,6 +17,8 @@ MAX_ENTITIES_COUNT = 500
 CREATE_FEES = False
 
 # whether to migrate and create only paid invoices (and skip unpaid ones)
+# TODO: careful with setting this to "False"! - still need to fix the logic that only
+#  creates invoices but not associated payments in Xero..
 ONLY_PAID_INVOICES = True
 
 
