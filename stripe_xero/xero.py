@@ -3,6 +3,7 @@ import logging
 import os
 import uuid
 from decimal import Decimal
+from enum import Enum, auto
 from urllib.parse import parse_qs
 
 from localstack.utils.files import save_file
@@ -47,19 +48,26 @@ XERO_TENANT_ID = os.environ["XERO_TENANT_ID"]
 XERO_CLIENT_ID = os.environ["XERO_CLIENT_ID"]
 XERO_CLIENT_SECRET = os.environ["XERO_CLIENT_SECRET"]
 XERO_STRIPE_CONTACT_ID = os.environ["XERO_STRIPE_CONTACT_ID"]
-# account for receiving revenues from Stripe subscription invoices
-XERO_ACCOUNT_STRIPE_SALES = os.environ["XERO_ACCOUNT_STRIPE_SALES"]
+# accounts for receiving revenues from Stripe subscription invoices (yearly/monthly)
+XERO_ACCOUNT_STRIPE_SALES_MONTHLY = os.environ["XERO_ACCOUNT_STRIPE_SALES_MONTHLY"]
+XERO_ACCOUNT_STRIPE_SALES_YEARLY = os.environ["XERO_ACCOUNT_STRIPE_SALES_YEARLY"]
 # account for Stripe fees to be paid per subscription invoice
 XERO_ACCOUNT_STRIPE_FEES = os.environ["XERO_ACCOUNT_STRIPE_FEES"]
 # account used for actual payments (revenues in, and fees out)
 XERO_ACCOUNT_STRIPE_PAYMENTS = os.environ["XERO_ACCOUNT_STRIPE_PAYMENTS"]
 # codes for tax rates
-INVOICE_TAX_RATE_CH = "OUTPUT"  # "UN77"
+# TODO: verify if that works. looks like we've seen some cases of CH customers where VAT was not applied
+INVOICE_TAX_RATE_CH = "TAX019"  # "UN81"
 # INVOICE_TAX_RATE_CH = "TAX010"  # "ULA"
 INVOICE_TAX_RATE_OTHER = "TAX010"  # "ULA"
 FEES_TAX_RATE = "NONE"  # "Tax Exempt"
 
 CACHE = {}
+
+
+class AccountType(Enum):
+    ACCOUNTS_PAYABLE = auto()
+    ACCOUNTS_RECEIVABLE = auto()
 
 
 class XeroClient(BaseClient):
@@ -144,7 +152,7 @@ class XeroClient(BaseClient):
 
     def create_invoice(
         self,
-        acc_code,
+        acc_type: AccountType,
         contact,
         description,
         total,
@@ -156,12 +164,19 @@ class XeroClient(BaseClient):
         paid_at=None,
         url=None,
         invoice_no=None,
+        interval=None,
     ):
         accounting_api = AccountingApi(self.client())
-        account_type = "ACCREC" if acc_code == XERO_ACCOUNT_STRIPE_SALES else "ACCPAY"
+        account_type = "ACCREC" if acc_type == AccountType.ACCOUNTS_RECEIVABLE else "ACCPAY"
 
         # determine invoice tax type based on customer country
         tax_type = self._get_customer_tax_type(contact)
+
+        # determine account code
+        if acc_type == AccountType.ACCOUNTS_PAYABLE:
+            acc_code = XERO_ACCOUNT_STRIPE_FEES
+        else:
+            acc_code = self._get_invoice_target_account_code(interval=interval)
 
         line_items = []
         for line in lines:
@@ -338,6 +353,8 @@ class XeroClient(BaseClient):
         return result.invoices[0]
 
     def create_refund_credit_note(self, data):
+        from stripe_xero import stripe
+
         accounting_api = AccountingApi(self.client())
 
         invoice = self.get_existing_customer_invoice(data)
@@ -353,7 +370,11 @@ class XeroClient(BaseClient):
             date=self._convert_date(data["created"]),
         )
         amount = data["amount"] / 100
-        acc_code = XERO_ACCOUNT_STRIPE_SALES
+
+        # determine account code for invoice associated with the refund
+        stripe_invoice = stripe.get_invoice(data["invoice"])
+        acc_code = self._get_invoice_target_account_code(stripe_invoice)
+
         tax_type = self._get_customer_tax_type(contact)
         line_item = LineItem(
             line_item_id="",
@@ -414,8 +435,12 @@ class XeroClient(BaseClient):
                 line.discount_rate = discount_rate
 
         plan = data.get("plan") or data["lines"]["data"][0]["plan"]["nickname"]
+
+        # determine the billing interval for this invoice
+        interval = self._get_billing_interval(data)
+
         invoice = self.create_invoice(
-            acc_code=XERO_ACCOUNT_STRIPE_SALES,
+            acc_type=AccountType.ACCOUNTS_RECEIVABLE,
             reference=f"Stripe invoice {data['id']}",
             contact=contact,
             description=f'{plan} ({data["number"]})',
@@ -427,6 +452,7 @@ class XeroClient(BaseClient):
             url=data["hosted_invoice_url"],
             # note: data["number"] is the human-readable invoice no shared with the customer
             invoice_no=data["number"],
+            interval=interval,
         )
 
         # create payment for invoice
@@ -462,7 +488,7 @@ class XeroClient(BaseClient):
         line_item.amount = fee["fee"]
 
         fee_invoice = self.create_invoice(
-            acc_code=XERO_ACCOUNT_STRIPE_FEES,
+            acc_type=AccountType.ACCOUNTS_PAYABLE,
             reference=FORMAT_INVOICE_NO.format(invoice_number=fee.get("id")),
             contact=XERO_STRIPE_CONTACT_ID,
             description=f"Stripe fee for invoice {invoice.invoice_number}",
@@ -594,6 +620,34 @@ class XeroClient(BaseClient):
 
         # re-create payment
         self.create_payment(xero_invoice, XERO_ACCOUNT_STRIPE_PAYMENTS)
+
+    def _get_billing_interval(self, invoice_data: dict) -> str:
+        """Determine the billing interval for the given invoice (yearly/monthly)"""
+        lines = invoice_data.get("lines") or {}
+        lines_data = lines.get("data") or []
+        intervals = set()
+        for line_item in lines_data:
+            if line_item.get("amount") <= 0:
+                continue
+            if (price := line_item.get("price")) and (recurring := price.get("recurring")):
+                if price.get("unit_amount"):
+                    intervals.add(recurring.get("interval"))
+            if (plan := line_item.get("plan")) and (plan.get("amount") or plan.get("usage_type") == "metered"):
+                intervals.add(plan.get("interval"))
+        if len(intervals) != 1:
+            raise Exception(
+                f"Expected single interval for invoice {invoice_data['id']}, got: {intervals} - {invoice_data}"
+            )
+        return list(intervals)[0]
+
+    def _get_invoice_target_account_code(self, invoice_data=None, interval=None) -> str:
+        """Determine the target account code to store the invoice to (based on interval, year/month)"""
+        interval = interval or self._get_billing_interval(invoice_data)
+        if interval == "year":
+            return XERO_ACCOUNT_STRIPE_SALES_YEARLY
+        if interval == "month":
+            return XERO_ACCOUNT_STRIPE_SALES_MONTHLY
+        raise Exception(f"Unexpected interval for invoice {invoice_data['id']}: {interval}")
 
 
 def reconcile_invoice_discounts():

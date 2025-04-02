@@ -142,7 +142,7 @@ def create_refunds():
     kwargs = get_creation_timeframe(state)
 
     for refund in stripe.get_refunds(auto_paging=True, **kwargs):
-        if not dry_run() and refund["id"] in migrated_refunds:
+        if refund["id"] in migrated_refunds:
             LOG.info(
                 f"Refund {refund['id']} ({date_to_str(refund['created'])}) already migrated - skipping"
             )

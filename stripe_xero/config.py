@@ -8,8 +8,8 @@ from localstack.utils.files import load_file
 STATE_FILE = os.path.realpath("migration.state.json")
 
 # subscriptions start/end dates
-START_DATE = os.environ.get("START_DATE") or "2023-09-01"
-END_DATE = os.environ.get("END_DATE") or "2024-01-02"
+START_DATE = os.environ.get("START_DATE") or "2024-12-31"
+END_DATE = os.environ.get("END_DATE") or "2025-03-31"
 # maximum no of entities to process per batch
 MAX_ENTITIES_COUNT = 500
 
@@ -28,7 +28,8 @@ def check_configs():
         "XERO_TENANT_ID",
         "XERO_CLIENT_ID",
         "XERO_CLIENT_SECRET",
-        "XERO_ACCOUNT_STRIPE_SALES",
+        "XERO_ACCOUNT_STRIPE_SALES_MONTHLY",
+        "XERO_ACCOUNT_STRIPE_SALES_YEARLY",
         "XERO_ACCOUNT_STRIPE_FEES",
         "XERO_ACCOUNT_STRIPE_PAYMENTS",
     ]
